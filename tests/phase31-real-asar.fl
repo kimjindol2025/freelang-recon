@@ -1,9 +1,10 @@
 ;; Phase 3.1 real ASAR verification.
-(use "/root/kilo-freelang/projects/freelang-recon/src/asar")
-(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+(use "src/asar")
+(use "src/evidence")
 
-(define official-path "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/official-electron.asar")
-(define abnormal-path "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/abnormal-payload-field.asar")
+(define fixture-root (str (or (env-get "RECON_ROOT") (shell-cwd)) "/tests/fixtures/"))
+(define official-path (str fixture-root "official-electron.asar"))
+(define abnormal-path (str fixture-root "abnormal-payload-field.asar"))
 (define official-opened (open_asar official-path))
 (define official-listed (list_entries official-opened))
 (define official-entries (get official-listed "entries"))

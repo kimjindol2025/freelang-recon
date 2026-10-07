@@ -1,7 +1,7 @@
 ;; Phase 1 executable capability probe.
 ;; stdin is supplied by the verification command.
 
-(use "/root/kilo-freelang/projects/freelang-recon/src/native-adapter")
+(use "src/native-adapter")
 
 (defn probe []
   (let [sample "/tmp/freelang-recon-phase1-sample.txt"

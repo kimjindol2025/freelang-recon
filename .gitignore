@@ -1,0 +1,7 @@
+node_modules/
+*.log
+*.orig
+.env*
+.freelang-recon-*canonical*.json
+tests/fixtures/synthetic-*.asar
+tests/fixtures/large-*.asar

@@ -32,7 +32,7 @@
 ## 실행 검증
 
 ```bash
-printf 'hello\nworld\n' | node /root/kilo-freelang/projects/freelang-recon/scripts/native-capability-probe.mjs /root/kilo-freelang/projects/freelang-recon/tests/phase1-sample.bin
+printf 'hello\nworld\n' | node "$RECON_ROOT/scripts/native-capability-probe.mjs" "$RECON_ROOT/tests/phase1-sample.bin"
 ```
 
 예상 결과에는 다음이 포함된다.

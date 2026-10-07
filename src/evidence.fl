@@ -2,8 +2,8 @@
 ;; Canonicalization and validation remain in FreeLang. The Node adapter only
 ;; reads a caller-created canonical file and returns its SHA-256 prefix.
 
-(define canonical-file "/tmp/freelang-recon-evidence-canonical.json")
-(define evidence-id-adapter "/root/kilo-freelang/projects/freelang-recon/scripts/evidence-id.mjs")
+(define recon-root (or (env-get "RECON_ROOT") (shell-cwd)))
+(define canonical-file (str recon-root "/.freelang-recon-evidence-canonical.json"))
 
 (defn join-items [separator items]
   (if (empty? items)
@@ -34,7 +34,7 @@
 (defn evidence-id-for [evidence]
   (let [canonical (canonical-serialize (evidence-without-id evidence))
         ignored-write (file-write canonical-file canonical)
-        result (str-trim (shell-safe "node" ["/root/kilo-freelang/projects/freelang-recon/scripts/evidence-id.mjs" canonical-file]))
+        result (str-trim (shell-safe "node" ["scripts/evidence-id.mjs" canonical-file]))
         ignored-delete (file-delete canonical-file)]
     result))
 

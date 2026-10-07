@@ -2,7 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import path from "node:path";
 
-const root = path.resolve("/root/kilo-freelang/projects/freelang-recon/tests/fixtures");
+const root = path.resolve(process.env.RECON_ROOT || process.cwd(), "tests/fixtures");
 const payloadParts = [Buffer.from("hello\n", "utf8"), Buffer.alloc(0), Buffer.from("nested", "utf8")];
 const payload = Buffer.concat(payloadParts);
 const digest = value => createHash("sha256").update(value).digest("hex");
@@ -59,6 +59,41 @@ await writeFile(path.join(root, "abnormal-payload-field.asar"), abnormalPayloadF
 
 const unsafeHeader = { files: { "../escape.txt": { size: 0, offset: "0" }, "safe.txt": { size: 0, offset: "0" } } };
 await writeFile(path.join(root, "unsafe-path.asar"), makeAsar(unsafeHeader, Buffer.alloc(0)));
+
+const blockBody = Buffer.from("abcdef", "utf8");
+const blockHeader = { files: {
+  "block.txt": { size: blockBody.length, offset: "0", integrity: {
+    algorithm: "SHA256", hash: digest(blockBody), blockSize: 3,
+    blocks: [digest(blockBody.subarray(0, 3)), digest(blockBody.subarray(3))]
+  } }
+} };
+const blockAsar = makeAsar(blockHeader, blockBody);
+await writeFile(path.join(root, "blocks.asar"), blockAsar);
+const blockMutated = Buffer.from(blockAsar);
+blockMutated[blockMutated.length - 1] ^= 0x01;
+await writeFile(path.join(root, "blocks-mutated.asar"), blockMutated);
+
+const unsafePathsHeader = { files: {
+  "back\\slash.txt": { size: 0, offset: "0" },
+  ["nul\u0000name.txt"]: { size: 0, offset: "0" },
+  "C:drive.txt": { size: 0, offset: "0" },
+  ".": { size: 0, offset: "0" },
+  "nested/.": { size: 0, offset: "0" }
+} };
+await writeFile(path.join(root, "unsafe-paths.asar"), makeAsar(unsafePathsHeader, Buffer.alloc(0)));
+
+if (process.argv.includes("--synthetic-2000")) {
+  const files = {};
+  const parts = [];
+  for (let index = 0; index < 2000; index += 1) {
+    const value = Buffer.from(`entry-${index}\n`, "utf8");
+    files[`synthetic/${String(index).padStart(4, "0")}.txt`] = {
+      size: value.length, offset: String(parts.reduce((total, item) => total + item.length, 0))
+    };
+    parts.push(value);
+  }
+  await writeFile(path.join(root, "synthetic-2000.asar"), makeAsar({ files }, Buffer.concat(parts)));
+}
 
 const jsonLength = Buffer.byteLength(JSON.stringify(headerObject));
 const headerArea = 8 + jsonLength + ((4 - (jsonLength % 4)) % 4);

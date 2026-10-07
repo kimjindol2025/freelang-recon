@@ -18,9 +18,9 @@
 ## 검증
 
 ```bash
-cd /root/freelang-surface-v0-clean-ek3qo2/v11
-node bootstrap.js check /root/kilo-freelang/projects/freelang-recon/src/local-inventory.fl
-node bootstrap.js run /root/kilo-freelang/projects/freelang-recon/src/local-inventory.fl
+cd "$FREELANG_V11_ROOT"
+node bootstrap.js check "$RECON_ROOT/src/local-inventory.fl"
+node bootstrap.js run "$RECON_ROOT/src/local-inventory.fl"
 ```
 
 ## 완료 보고

@@ -6,7 +6,7 @@ REA처럼 분석 Provider를 연결할 수 있지만, 결과를 FreeLang Coding 
 
 ## Phase 2
 
-현재 구현은 대상 파일을 실행하지 않고, 승인된 고정 디렉터리의 목록과 manifest digest를 생성합니다.
+현재 구현은 대상 파일을 실행하지 않고, `RECON_INVENTORY_TARGET` 또는 저장소의 fixture 디렉터리 목록과 manifest digest를 생성합니다.
 
 ## Phase 1 환경 점검
 
@@ -29,9 +29,9 @@ target
 ## 실행
 
 ```bash
-cd /root/freelang-surface-v0-clean-ek3qo2/v11
-node bootstrap.js check /root/kilo-freelang/projects/freelang-recon/src/local-inventory.fl
-node bootstrap.js run /root/kilo-freelang/projects/freelang-recon/src/local-inventory.fl
+cd "$FREELANG_V11_ROOT"
+node bootstrap.js check "$RECON_ROOT/src/local-inventory.fl"
+node bootstrap.js run "$RECON_ROOT/src/local-inventory.fl"
 ```
 
 ## 다음 단계

@@ -1,5 +1,5 @@
 ;; Phase 2 Evidence v1 tests.
-(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+(use "src/evidence")
 
 (define artifact {"path" "app.asar" "sha256" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 (define location {"entry" "package.json" "offset" nil "length" nil})

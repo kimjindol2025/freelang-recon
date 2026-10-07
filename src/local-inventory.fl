@@ -16,4 +16,6 @@
      :digest digest
      :unknowns ["recursive child metadata" "binary symbols" "runtime behavior"]}))
 
-(println (json-stringify (inventory "/root/kilo-freelang/projects/freelang-framework/frontend/public")))
+(define default-target (or (env-get "RECON_INVENTORY_TARGET")
+                           (str (or (env-get "RECON_ROOT") (shell-cwd)) "/tests/fixtures")))
+(println (json-stringify (inventory default-target)))

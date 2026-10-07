@@ -3,8 +3,11 @@
 Phase 3 reads an ASAR header and emits ASAR facts as Evidence v1 envelopes.
 Parsing, tree walking, path policy, bounds checks, and evidence construction are
 implemented in FreeLang. `scripts/native-bytes.mjs` only reads a bounded byte
-range or calculates SHA-256 for that range; file bodies are never extracted to
-disk or passed through FreeLang for hashing.
+range or calculates SHA-256 for that range. Entry hashes use `sha256_ranges` in
+chunks of at most 500 ranges, so large archives do not spawn one adapter
+process per entry. The `read_prefixes` adapter command similarly reads up to
+500 file prefixes in one process for large validation matrices. File bodies
+are never extracted to disk or passed through FreeLang for hashing.
 
 ## Supported structure
 
@@ -32,7 +35,9 @@ reported but not read from the archive.
 - `asar.entry` — observed path, entry kind (`file`, `dir`, or `link`), size,
   payload-relative offset, and SHA-256 when the file range is readable.
 - `asar.integrity` — observed declared SHA-256, computed SHA-256, and match
-  result. Missing declarations are `unknown`, not silently skipped.
+  result, plus block comparison fields when block metadata is present. Missing
+  block metadata is recorded as `blocks_match: "unknown"`; missing declarations
+  are `unknown`, not silently skipped.
 
 Every public result carries an Evidence v1 envelope. Unreadable, unsafe, or
 unavailable facts use `confidence: "unknown"`, `value: null`, and a reason in
@@ -40,7 +45,8 @@ unavailable facts use `confidence: "unknown"`, `value: null`, and a reason in
 
 ## Safety and limits
 
-- `..`, absolute paths, empty path segments, and invalid ranges are rejected;
+- `..`, `.`, absolute paths, empty path segments, backslashes, NUL bytes,
+  drive-letter forms, and invalid ranges are rejected;
   no filesystem lookup is attempted for an unsafe entry.
 - Header areas larger than 64 MiB, truncated prefixes/headers/payloads, invalid
   JSON, and unsupported integrity algorithms become error evidence rather than

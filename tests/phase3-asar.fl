@@ -1,11 +1,14 @@
 ;; Phase 3 ASAR parser tests.
-(use "/root/kilo-freelang/projects/freelang-recon/src/asar")
-(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+(use "src/asar")
+(use "src/evidence")
 
-(define fixture-root "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/")
+(define fixture-root (str (or (env-get "RECON_ROOT") (shell-cwd)) "/tests/fixtures/"))
 (define normal-path (str fixture-root "normal.asar"))
 (define mutated-path (str fixture-root "mutated.asar"))
 (define unsafe-path (str fixture-root "unsafe-path.asar"))
+(define unsafe-paths (str fixture-root "unsafe-paths.asar"))
+(define blocks-path (str fixture-root "blocks.asar"))
+(define blocks-mutated-path (str fixture-root "blocks-mutated.asar"))
 (define normal-opened (open_asar normal-path))
 (define normal-listed (list_entries normal-opened))
 (define normal-entries (get normal-listed "entries"))
@@ -86,6 +89,47 @@
   (and (= (get (validate_evidence (get normal-opened "header")) "valid") true)
        (= (get (validate_evidence (get (first normal-entries) "value")) "valid") false)))
 
+(defn test-12 []
+  (let [integrity (get (verify_integrity (open_asar blocks-path)) "integrity")
+        item (first integrity)
+        value (get item "value")]
+    (and (= (get value "matches") true)
+         (= (get value "block_size") 3)
+         (= (get value "block_count") 2)
+         (= (get value "blocks_match") true)
+         (nil? (get value "first_mismatch_block")))))
+
+(defn test-13 []
+  (let [integrity (get (verify_integrity (open_asar blocks-mutated-path)) "integrity")
+        item (first integrity)
+        value (get item "value")]
+    (and (= (get value "matches") false)
+         (= (get value "blocks_match") false)
+         (= (get value "first_mismatch_block") 1))))
+
+(defn test-14 []
+  (let [nul-path (json-parse "\"nul\\u0000name\"")]
+    (and (not (safe-path? "back\\slash.txt"))
+         (not (safe-path? nul-path))
+         (not (safe-path? "C:drive.txt"))
+         (not (safe-path? "."))
+         (not (safe-path? "nested/.")))))
+
+(defn test-15 []
+  (let [hello (find-entry normal-entries "hello.txt")
+        range (entry-range normal-opened {"path" "hello.txt" "node" {"size" 6 "offset" "0"}})
+        single (adapter-call "sha256_range" (get (get normal-opened "artifact") "path")
+                             (get range "offset") (get range "length"))
+        batch (adapter-batch-call (get (get normal-opened "artifact") "path") [range])]
+    (and (= (get (get hello "value") "sha256") (get single "sha256"))
+         (= (get (first (get batch "hashes")) "sha256") (get single "sha256")))))
+
+(defn test-16 []
+  (let [integrity (get (verify_integrity normal-opened) "integrity")
+        hello (first (filter (fn [e] (= (get (get e "location") "entry") "hello.txt")) integrity))]
+    (= (get (get hello "value") "blocks_match") "unknown")))
+
+
 (defn run-test [number result]
   (assert result (str "test " number " failed"))
   (println (str "TEST " number " PASS")))
@@ -101,4 +145,9 @@
 (run-test 9 (test-9))
 (run-test 10 (test-10))
 (run-test 11 (test-11))
+(run-test 12 (test-12))
+(run-test 13 (test-13))
+(run-test 14 (test-14))
+(run-test 15 (test-15))
+(run-test 16 (test-16))
 (println "PHASE3 ASAR PASS")

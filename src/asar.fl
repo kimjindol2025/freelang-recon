@@ -1,15 +1,54 @@
 ;; ASAR v1 parser. Header/tree logic stays in FreeLang; Node only accesses
 ;; bounded byte ranges and computes SHA-256 for those ranges.
 
-(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+(use "src/evidence")
 
-(define native-bytes-adapter "/root/kilo-freelang/projects/freelang-recon/scripts/native-bytes.mjs")
+(define asar-recon-root (or (env-get "RECON_ROOT") (shell-cwd)))
+(define native-bytes-adapter (str asar-recon-root "/scripts/native-bytes.mjs"))
 (define asar-header-limit 67108864)
 
 (defn adapter-call [command path offset length]
   (json-parse
     (str-trim
       (shell-safe "node" [native-bytes-adapter command path (str offset) (str length)]))))
+
+(defn adapter-batch-call [path ranges]
+  (json-parse
+    (str-trim
+      (shell-safe "node" [native-bytes-adapter "sha256_ranges" path (json-stringify ranges)]))))
+
+(defn adapter-prefix-call [paths]
+  (json-parse
+    (str-trim
+      (shell-safe "node" [native-bytes-adapter "read_prefixes" (json-stringify paths)]))))
+
+(defn batch-prefixes [paths]
+  (if (empty? paths)
+      []
+      (let [chunk (first-n paths 500)
+            result (adapter-prefix-call chunk)
+            prefixes (if (= (get result "ok") true) (get result "prefixes") [])]
+        (concat prefixes (batch-prefixes (drop-n paths 500))))))
+
+(defn first-n [items n]
+  (if (or (= n 0) (empty? items))
+      []
+      (concat [(first items)] (first-n (rest items) (- n 1)))))
+
+(defn drop-n [items n]
+  (if (or (= n 0) (empty? items)) items (drop-n (rest items) (- n 1))))
+
+(defn batch-hashes [path ranges]
+  (if (empty? ranges)
+      []
+      (let [chunk (first-n ranges 500)
+            result (adapter-batch-call path chunk)
+            hashes (if (= (get result "ok") true) (get result "hashes") [])]
+        (concat hashes (batch-hashes path (drop-n ranges 500))))))
+
+(defn hash-for [hashes entry]
+  (let [found (first (filter (fn [item] (= (get item "id") entry)) hashes))]
+    (if (map? found) (get found "sha256") nil)))
 
 (defn make_error_evidence [path kind reason]
   (make_evidence kind
@@ -36,7 +75,11 @@
   (let [segments (str-split path "/")]
     (and (not (= path ""))
          (not (starts-with? path "/"))
+         (not (> (count (str-split path "\\")) 1))
+         (not (> (count (str-split (json-stringify path) "u0000")) 1))
+         (not (and (> (count path) 1) (= (get path 1) ":")))
          (not (some (fn [segment] (= segment "")) segments))
+         (not (some (fn [segment] (= segment ".")) segments))
          (not (some (fn [segment] (= segment "..")) segments)))))
 
 (defn parse-offset [value]
@@ -102,7 +145,7 @@
                          "prefix" {"marker" magic "header_area" header-area "payload_size" payload-size "json_length" json-length}
                          "tree" parsed}))))))))
 
-(defn make-entry-evidence [opened record]
+(defn make-entry-evidence-with-digest [opened record supplied-digest]
   (let [path (get record "path")
         node (get record "node")
         artifact (get opened "artifact")
@@ -143,8 +186,11 @@
                                (number? offset) (>= offset 0)
                                (<= (+ offset size) payload-size)
                                (<= (+ payload-offset offset size) file-size))
-              hash-result (if valid-range (adapter-call "sha256_range" (get artifact "path") (+ payload-offset offset) size) nil)
-              digest (if (and valid-range (= (get hash-result "ok") true)) (get hash-result "sha256") nil)]
+              hash-result (if (and valid-range (= supplied-digest "__single__"))
+                             (adapter-call "sha256_range" (get artifact "path") (+ payload-offset offset) size) nil)
+              digest (if (= supplied-digest "__single__")
+                         (if (and valid-range (= (get hash-result "ok") true)) (get hash-result "sha256") nil)
+                         (if valid-range supplied-digest nil))]
           (if (nil? digest)
               (make_evidence "asar.entry" artifact
                              {"entry" path "offset" offset "length" size}
@@ -153,6 +199,24 @@
                              {"entry" path "offset" offset "length" size}
                              {"path" path "kind" "file" "size" size "offset" offset "sha256" digest}
                              "observed" []))))))
+
+(defn make-entry-evidence [opened record]
+  (make-entry-evidence-with-digest opened record "__single__"))
+
+(defn entry-range [opened record]
+  (let [node (get record "node")
+        size (if (map? node) (get node "size") nil)
+        offset (if (map? node) (parse-offset (get node "offset")) nil)
+        payload-size (get opened "payload_available")]
+    (if (and (safe-path? (get record "path"))
+             (map? node)
+             (not (map? (get node "files")))
+             (not (contains? node "link"))
+             (not (= (get node "unpacked") true))
+             (number? size) (>= size 0) (number? offset) (>= offset 0)
+             (<= (+ offset size) payload-size))
+        {"id" (get record "path") "offset" (+ (get opened "payload_offset") offset) "length" size}
+        nil)))
 
 (defn open_asar [path]
   (if (not (file_exists path))
@@ -189,11 +253,30 @@
 (defn list_entries [opened]
   (if (not (= (get opened "ok") true))
       opened
-      (let [entries (map (fn [record] (make-entry-evidence opened record)) (get opened "records"))]
+      (let [records (get opened "records")
+            ranges (filter (fn [item] (not (nil? item))) (map (fn [record] (entry-range opened record)) records))
+            hashes (batch-hashes (get (get opened "artifact") "path") ranges)
+            entries (map (fn [record]
+                           (let [digest (hash-for hashes (get record "path"))]
+                             (make-entry-evidence-with-digest opened record (if (nil? digest) "__missing__" digest)))) records)]
         {"ok" true "entries" entries "evidence" (concat [(get opened "header")] entries)})))
 
 (defn hash_entry [opened record]
   (make-entry-evidence opened record))
+
+(defn block-hashes [path absolute-offset size block-size blocks index]
+  (if (>= index (count blocks))
+      []
+      (let [remaining (- size (* index block-size))
+            length (if (< remaining block-size) remaining block-size)
+            result (adapter-call "sha256_range" path (+ absolute-offset (* index block-size)) length)
+            computed (if (= (get result "ok") true) (get result "sha256") nil)]
+        (conj (block-hashes path absolute-offset size block-size blocks (+ index 1))
+              {"declared" (get blocks index) "computed" computed
+               "matches" (= (get blocks index) computed) "index" index}))))
+
+(defn blocks-all-match? [results]
+  (and (not (empty? results)) (every? (fn [item] (= (get item "matches") true)) results)))
 
 (defn integrity-evidence [opened record]
   (let [path (get record "path")
@@ -219,11 +302,29 @@
                              nil "unknown" ["unsupported integrity algorithm"])
             true
               (let [declared (get integrity "hash")
-                    computed (get value "sha256")]
+                    computed (get value "sha256")
+                    block-size (get integrity "blockSize")
+                    blocks (get integrity "blocks")
+                    valid-blocks (and (number? block-size) (> block-size 0) (array? blocks) (not (empty? blocks)))
+                    block-results (if valid-blocks
+                                      (block-hashes (get artifact "path")
+                                                    (+ (get opened "payload_offset") (get value "offset"))
+                                                    (get value "size") block-size blocks 0)
+                                      [])
+                    blocks-match (if valid-blocks (blocks-all-match? block-results) "unknown")
+                    limitations (if valid-blocks [] ["integrity blocks absent or malformed; block comparison unknown"])]
                 (make_evidence "asar.integrity" artifact
                                {"entry" path "offset" (get value "offset") "length" (get value "size")}
-                               {"algorithm" "sha256" "declared" declared "computed" computed "matches" (= declared computed)}
-                               "observed" [])))))))
+                               {"algorithm" "sha256" "declared" declared "computed" computed "matches" (= declared computed)
+                                "block_size" (if valid-blocks block-size nil)
+                                "block_count" (if valid-blocks (count blocks) 0)
+                                "blocks_match" blocks-match
+                                "first_mismatch_block"
+                                  (if valid-blocks
+                                      (let [mismatch (first (filter (fn [item] (= (get item "matches") false)) block-results))]
+                                        (if (map? mismatch) (get mismatch "index") nil))
+                                      nil)}
+                               "observed" limitations)))))))
 
 (defn verify_integrity [opened]
   (if (not (= (get opened "ok") true))
