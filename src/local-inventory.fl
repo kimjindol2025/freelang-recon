@@ -1,0 +1,19 @@
+;; FreeLang Recon Phase 2 local inventory
+;; 대상은 실행하지 않고 디렉터리 목록과 manifest digest만 수집한다.
+
+(defn inventory [target]
+  (let [entries (sort (dir-list target))
+        manifest {:target target :entries entries :entry_count (count entries)}
+        manifest-path "/tmp/freelang-recon-manifest.json"
+        raw (json-stringify manifest)
+        ignored-write (file-write manifest-path raw)
+        digest-output (shell-safe "sha256sum" [manifest-path])
+        digest (first (str-split digest-output " "))
+        ignored-delete (file-delete manifest-path)]
+    {:provider "local-inventory"
+     :execution "not-executed"
+     :manifest manifest
+     :digest digest
+     :unknowns ["recursive child metadata" "binary symbols" "runtime behavior"]}))
+
+(println (json-stringify (inventory "/root/kilo-freelang/projects/freelang-framework/frontend/public")))
