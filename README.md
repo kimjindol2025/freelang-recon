@@ -8,6 +8,16 @@ REA처럼 분석 Provider를 연결할 수 있지만, 결과를 FreeLang Coding 
 
 현재 구현은 대상 파일을 실행하지 않고, 승인된 고정 디렉터리의 목록과 manifest digest를 생성합니다.
 
+## Phase 1 환경 점검
+
+환경 점검 결과는 [ENVIRONMENT-CHECK.md](docs/ENVIRONMENT-CHECK.md)에 기록했습니다. JSON은 v11 기본 기능을 사용하고, stdin·바이너리 파일·파일 SHA-256은 최소 native adapter로 보강했습니다.
+
+Native probe:
+
+```bash
+printf 'hello\nworld\n' | node scripts/native-capability-probe.mjs tests/phase1-sample.bin
+```
+
 ```text
 target
   → local inventory

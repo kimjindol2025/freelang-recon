@@ -1,0 +1,152 @@
+;; Evidence v1 envelope.
+;; Canonicalization and validation remain in FreeLang. The Node adapter only
+;; reads a caller-created canonical file and returns its SHA-256 prefix.
+
+(define canonical-file "/tmp/freelang-recon-evidence-canonical.json")
+(define evidence-id-adapter "/root/kilo-freelang/projects/freelang-recon/scripts/evidence-id.mjs")
+
+(defn join-items [separator items]
+  (if (empty? items)
+      ""
+      (str (first items)
+           (reduce (fn [acc item] (str acc separator item)) "" (rest items)))))
+
+(defn canonical-serialize [value]
+  (cond
+    (= (type-of value) "map")
+      (let [sorted-keys (sort (keys value))
+            fields (map (fn [key]
+                          (str (json-stringify (str key)) ":"
+                               (canonical-serialize (get value key))))
+                        sorted-keys)]
+        (str "{" (join-items "," fields) "}"))
+    (= (type-of value) "array")
+      (str "[" (join-items "," (map canonical-serialize value)) "]")
+    (= (type-of value) "string") (json-stringify value)
+    (= (type-of value) "number") (json-stringify value)
+    (= (type-of value) "boolean") (if value "true" "false")
+    (= (type-of value) "nil") "null"
+    true (json-stringify value)))
+
+(defn evidence-without-id [evidence]
+  (dissoc evidence "evidence_id"))
+
+(defn evidence-id-for [evidence]
+  (let [canonical (canonical-serialize (evidence-without-id evidence))
+        ignored-write (file-write canonical-file canonical)
+        result (str-trim (shell-safe "node" ["/root/kilo-freelang/projects/freelang-recon/scripts/evidence-id.mjs" canonical-file]))
+        ignored-delete (file-delete canonical-file)]
+    result))
+
+(defn make-evidence [kind artifact location value confidence limitations]
+  (let [base {"schema" "evidence/v1"
+              "kind" kind
+              "artifact" artifact
+              "location" location
+              "value" value
+              "confidence" confidence
+              "limitations" limitations}]
+    (assoc base "evidence_id" (evidence-id-for base))))
+
+(defn error-result [errors]
+  {"valid" false "errors" errors})
+
+(defn valid-result []
+  {"valid" true "errors" []})
+
+(defn required-map-field? [value field]
+  (and (map? value) (some? (get value field))))
+
+(defn string-array? [value]
+  (and (array? value)
+       (every? (fn [item] (= (type-of item) "string")) value)))
+
+(defn json-value? [value]
+  (cond
+    (= (type-of value) "nil") true
+    (= (type-of value) "string") true
+    (= (type-of value) "number") true
+    (= (type-of value) "boolean") true
+    (= (type-of value) "array") (every? json-value? value)
+    (= (type-of value) "map")
+      (and (every? (fn [key] (= (type-of key) "string")) (keys value))
+           (every? (fn [key] (json-value? (get value key))) (keys value)))
+    true false))
+
+(defn validate-evidence [evidence]
+  (let [errors []]
+    (if (not (map? evidence))
+        (error-result ["evidence must be a map"])
+        (let [errors (if (not (required-map-field? evidence "schema"))
+                         (conj errors "missing schema") errors)
+              errors (if (not (= (type-of (get evidence "schema")) "string"))
+                         (conj errors "schema must be a string") errors)
+              errors (if (not (= (get evidence "schema") "evidence/v1"))
+                         (conj errors "schema must be evidence/v1") errors)
+              errors (if (not (required-map-field? evidence "evidence_id"))
+                         (conj errors "missing evidence_id") errors)
+              errors (if (not (= (type-of (get evidence "evidence_id")) "string"))
+                         (conj errors "evidence_id must be a string") errors)
+              errors (if (not (= (count (get evidence "evidence_id")) 16))
+                         (conj errors "evidence_id must be 16 characters") errors)
+              errors (if (not (required-map-field? evidence "kind"))
+                         (conj errors "missing kind") errors)
+              errors (if (not (= (type-of (get evidence "kind")) "string"))
+                         (conj errors "kind must be a string") errors)
+              artifact (get evidence "artifact")
+              errors (if (not (map? artifact)) (conj errors "artifact must be a map") errors)
+              errors (if (not (required-map-field? artifact "path"))
+                         (conj errors "missing artifact.path") errors)
+              errors (if (not (= (type-of (get artifact "path")) "string"))
+                         (conj errors "artifact.path must be a string") errors)
+              errors (if (not (required-map-field? artifact "sha256"))
+                         (conj errors "missing artifact.sha256") errors)
+              errors (if (not (= (type-of (get artifact "sha256")) "string"))
+                         (conj errors "artifact.sha256 must be a string") errors)
+              location (get evidence "location")
+              errors (if (not (map? location)) (conj errors "location must be a map") errors)
+              errors (if (not (required-map-field? location "entry"))
+                         (conj errors "missing location.entry") errors)
+              errors (if (not (= (type-of (get location "entry")) "string"))
+                         (conj errors "location.entry must be a string") errors)
+              errors (if (not (or (nil? (get location "offset"))
+                                  (= (type-of (get location "offset")) "number")))
+                         (conj errors "location.offset must be a number or null") errors)
+              errors (if (not (or (nil? (get location "length"))
+                                  (= (type-of (get location "length")) "number")))
+                         (conj errors "location.length must be a number or null") errors)
+              errors (if (not (contains? evidence "value"))
+                         (conj errors "missing value") errors)
+              errors (if (and (contains? evidence "value")
+                              (not (json-value? (get evidence "value"))))
+                         (conj errors "value must be JSON or null") errors)
+              confidence (get evidence "confidence")
+              errors (if (not (required-map-field? evidence "confidence"))
+                         (conj errors "missing confidence") errors)
+              errors (if (not (or (= confidence "observed")
+                                  (= confidence "inferred")
+                                  (= confidence "unknown")))
+                         (conj errors "confidence must be observed, inferred, or unknown") errors)
+              limitations (get evidence "limitations")
+              errors (if (not (required-map-field? evidence "limitations"))
+                         (conj errors "missing limitations") errors)
+              errors (if (not (string-array? limitations))
+                         (conj errors "limitations must be an array of strings") errors)
+              errors (if (and (= confidence "inferred")
+                              (or (not (array? limitations)) (empty? limitations)))
+                         (conj errors "inferred requires at least one limitation") errors)
+              errors (if (and (= confidence "unknown") (not (nil? (get evidence "value"))))
+                         (conj errors "unknown requires value to be null") errors)
+              errors (if (and (= confidence "unknown")
+                              (or (not (array? limitations)) (empty? limitations)))
+                         (conj errors "unknown requires at least one limitation") errors)
+              errors (if (and (= (count errors) 0)
+                              (not (= (get evidence "evidence_id") (evidence-id-for evidence))))
+                         (conj errors "evidence_id does not match canonical content") errors)]
+          (if (= (count errors) 0) (valid-result) (error-result errors))))))
+
+;; Public snake_case spellings required by the Evidence v1 contract.
+(defn canonical_serialize [value] (canonical-serialize value))
+(defn make_evidence [kind artifact location value confidence limitations]
+  (make-evidence kind artifact location value confidence limitations))
+(defn validate_evidence [evidence] (validate-evidence evidence))

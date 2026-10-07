@@ -1,0 +1,232 @@
+;; ASAR v1 parser. Header/tree logic stays in FreeLang; Node only accesses
+;; bounded byte ranges and computes SHA-256 for those ranges.
+
+(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+
+(define native-bytes-adapter "/root/kilo-freelang/projects/freelang-recon/scripts/native-bytes.mjs")
+(define asar-header-limit 67108864)
+
+(defn adapter-call [command path offset length]
+  (json-parse
+    (str-trim
+      (shell-safe "node" [native-bytes-adapter command path (str offset) (str length)]))))
+
+(defn make_error_evidence [path kind reason]
+  (make_evidence kind
+                 {"path" path "sha256" "unknown"}
+                 {"entry" "<asar>" "offset" nil "length" nil}
+                 nil
+                 "unknown"
+                 [reason]))
+
+(defn header-failure [path reason]
+  (let [evidence (make_error_evidence path "asar.header" reason)]
+    {"ok" false "error" evidence}))
+
+(defn open-failure [path reason]
+  (let [evidence (make_error_evidence path "asar.header" reason)]
+    {"ok" false "evidence" [evidence]}))
+
+(defn artifact-for [path size]
+  (let [result (adapter-call "sha256_range" path 0 size)]
+    {"path" path
+     "sha256" (if (= (get result "ok") true) (get result "sha256") "unknown")}))
+
+(defn safe-path? [path]
+  (let [segments (str-split path "/")]
+    (and (not (= path ""))
+         (not (starts-with? path "/"))
+         (not (some (fn [segment] (= segment "")) segments))
+         (not (some (fn [segment] (= segment "..")) segments)))))
+
+(defn parse-offset [value]
+  (cond
+    (= (type-of value) "number") value
+    (= (type-of value) "string") (str-to-num value)
+    true nil))
+
+(defn join-entry-path [prefix name]
+  (if (= prefix "") name (str prefix "/" name)))
+
+(defn walk-files [files prefix]
+  (reduce
+    (fn [acc name]
+      (let [node (get files name)
+            path (join-entry-path prefix (str name))
+            record {"path" path "node" node}]
+        (if (and (map? node) (map? (get node "files")))
+            (concat (conj acc record) (walk-files (get node "files") path))
+            (conj acc record))))
+    []
+    (sort (keys files))))
+
+(defn parse-header [path file-size]
+  (if (< file-size 16)
+      (header-failure path "file shorter than 16-byte ASAR prefix")
+      (let [prefix-result (adapter-call "read_bytes" path 0 16)
+            prefix (get prefix-result "base64")]
+        (if (not (= (get prefix-result "ok") true))
+            (header-failure path "unable to read ASAR prefix")
+            (let [magic (buf-read-u32le prefix 0)
+                  header-area (buf-read-u32le prefix 4)
+                  payload-size (buf-read-u32le prefix 8)
+                  json-length (buf-read-u32le prefix 12)
+                  payload-offset (+ 8 header-area)]
+              (cond
+                (not (= magic 4))
+                  (header-failure path "invalid ASAR prefix marker")
+                (> header-area asar-header-limit)
+                  (header-failure path "header area exceeds 64 MiB limit")
+                (< header-area 8)
+                  (header-failure path "header area is smaller than its prefix")
+                (> json-length (- header-area 8))
+                  (header-failure path "JSON length exceeds header area")
+                (> payload-offset file-size)
+                  (header-failure path "header extends beyond file")
+                true
+                  (let [json-result (adapter-call "read_bytes" path 16 json-length)
+                        json-base64 (get json-result "base64")
+                        json-text (if (= (get json-result "ok") true)
+                                      (buf-read-str json-base64 0 json-length)
+                                      "")
+                        parsed-result (fl-try (json-parse json-text) (catch err nil))
+                        parsed (get parsed-result "value")]
+                    (if (not (and (= (get json-result "ok") true) (map? parsed)))
+                        (header-failure path "ASAR header JSON could not be parsed")
+                        {"ok" true
+                         "file_size" file-size
+                         "payload_offset" payload-offset
+                         "payload_size" payload-size
+                                         "header_area" header-area
+                                         "json_length" json-length
+                         "prefix" {"marker" magic "header_area" header-area "payload_size" payload-size "json_length" json-length}
+                         "tree" parsed}))))))))
+
+(defn make-entry-evidence [opened record]
+  (let [path (get record "path")
+        node (get record "node")
+        artifact (get opened "artifact")
+        payload-offset (get opened "payload_offset")
+        payload-size (get opened "payload_available")
+        file-size (get opened "file_size")]
+    (cond
+      (not (safe-path? path))
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["unsafe path rejected; filesystem access skipped"])
+      (not (map? node))
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["entry metadata is not an object"])
+      (map? (get node "files"))
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       {"path" path "kind" "dir" "size" nil "offset" nil "sha256" nil}
+                       "observed" [])
+      (contains? node "link")
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       {"path" path "kind" "link" "size" nil "offset" nil "sha256" nil "link" (get node "link")}
+                       "observed" [])
+      (= (get node "unpacked") true)
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["unpacked; separate file required"])
+      (not (and (contains? node "size") (contains? node "offset")))
+        (make_evidence "asar.entry" artifact
+                       {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["file entry is missing size or offset"])
+      true
+        (let [size (get node "size")
+              offset (parse-offset (get node "offset"))
+              valid-range (and (number? size) (>= size 0)
+                               (number? offset) (>= offset 0)
+                               (<= (+ offset size) payload-size)
+                               (<= (+ payload-offset offset size) file-size))
+              hash-result (if valid-range (adapter-call "sha256_range" (get artifact "path") (+ payload-offset offset) size) nil)
+              digest (if (and valid-range (= (get hash-result "ok") true)) (get hash-result "sha256") nil)]
+          (if (nil? digest)
+              (make_evidence "asar.entry" artifact
+                             {"entry" path "offset" offset "length" size}
+                             nil "unknown" ["entry range is invalid or unreadable"])
+              (make_evidence "asar.entry" artifact
+                             {"entry" path "offset" offset "length" size}
+                             {"path" path "kind" "file" "size" size "offset" offset "sha256" digest}
+                             "observed" []))))))
+
+(defn open_asar [path]
+  (if (not (file_exists path))
+      (open-failure path "ASAR file does not exist")
+      (let [file-size (file-size path)
+            parsed (parse-header path file-size)]
+        (if (not (= (get parsed "ok") true))
+            {"ok" false "evidence" [(get parsed "error")]}
+            (let [artifact (artifact-for path file-size)
+                  records (walk-files (get (get parsed "tree") "files") "")
+                  header-limitations (if (= (get parsed "payload_size") (- (get parsed "header_area") 4))
+                                        []
+                                        ["prefix field [2] differs from header area - 4; treated as observed only"])
+                  header (make_evidence "asar.header" artifact
+                                        {"entry" "<header>" "offset" 16 "length" (get parsed "json_length")}
+                                        {"header_size" (get parsed "header_area")
+                                         "json_length" (get parsed "json_length")
+                                         "payload_size" (get parsed "payload_size")
+                                         "payload_offset" (get parsed "payload_offset")
+                                         "prefix_field_2_relation" (= (get parsed "payload_size") (- (get parsed "header_area") 4))
+                                         "entry_count" (count records)}
+                                        "observed" header-limitations)]
+              {"ok" true
+               "file_size" file-size
+               "payload_offset" (get parsed "payload_offset")
+               "payload_size" (get parsed "payload_size")
+               "payload_available" (- file-size (get parsed "payload_offset"))
+               "tree" (get parsed "tree")
+               "artifact" artifact
+               "records" records
+               "header" header
+               "evidence" [header]})))))
+
+(defn list_entries [opened]
+  (if (not (= (get opened "ok") true))
+      opened
+      (let [entries (map (fn [record] (make-entry-evidence opened record)) (get opened "records"))]
+        {"ok" true "entries" entries "evidence" (concat [(get opened "header")] entries)})))
+
+(defn hash_entry [opened record]
+  (make-entry-evidence opened record))
+
+(defn integrity-evidence [opened record]
+  (let [path (get record "path")
+        node (get record "node")
+        artifact (get opened "artifact")
+        integrity (get node "integrity")]
+    (cond
+      (not (safe-path? path))
+        (make_evidence "asar.integrity" artifact {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["unsafe path rejected; integrity not read"])
+      (not (map? integrity))
+        (make_evidence "asar.integrity" artifact {"entry" path "offset" nil "length" nil}
+                       nil "unknown" ["integrity declaration absent"])
+      true
+        (let [entry-evidence (make-entry-evidence opened record)
+              value (get entry-evidence "value")]
+          (cond
+            (not (and (map? value) (= (get value "kind") "file")))
+              (make_evidence "asar.integrity" artifact {"entry" path "offset" nil "length" nil}
+                             nil "unknown" ["entry content is unavailable for integrity verification"])
+            (not (= (str-lower (str (get integrity "algorithm"))) "sha256"))
+              (make_evidence "asar.integrity" artifact {"entry" path "offset" nil "length" nil}
+                             nil "unknown" ["unsupported integrity algorithm"])
+            true
+              (let [declared (get integrity "hash")
+                    computed (get value "sha256")]
+                (make_evidence "asar.integrity" artifact
+                               {"entry" path "offset" (get value "offset") "length" (get value "size")}
+                               {"algorithm" "sha256" "declared" declared "computed" computed "matches" (= declared computed)}
+                               "observed" [])))))))
+
+(defn verify_integrity [opened]
+  (if (not (= (get opened "ok") true))
+      opened
+      (let [evidence (map (fn [record] (integrity-evidence opened record)) (get opened "records"))]
+        {"ok" true "integrity" evidence "evidence" evidence})))

@@ -1,0 +1,104 @@
+;; Phase 3 ASAR parser tests.
+(use "/root/kilo-freelang/projects/freelang-recon/src/asar")
+(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+
+(define fixture-root "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/")
+(define normal-path (str fixture-root "normal.asar"))
+(define mutated-path (str fixture-root "mutated.asar"))
+(define unsafe-path (str fixture-root "unsafe-path.asar"))
+(define normal-opened (open_asar normal-path))
+(define normal-listed (list_entries normal-opened))
+(define normal-entries (get normal-listed "entries"))
+(define normal-integrity (get (verify_integrity normal-opened) "integrity"))
+(define mutated-integrity (get (verify_integrity (open_asar mutated-path)) "integrity"))
+(define unsafe-entries (get (list_entries (open_asar unsafe-path)) "entries"))
+
+(defn find-entry [entries path]
+  (first (filter (fn [e] (= (get (get e "location") "entry") path)) entries)))
+
+(defn find-integrity [entries path]
+  (first (filter (fn [e] (= (get e "location") {"entry" path "offset" 0 "length" 6})) entries)))
+
+(defn evidence-valid? [evidence]
+  (= (get (validate_evidence evidence) "valid") true))
+
+(defn all-evidence-valid? [evidence]
+  (every? evidence-valid? evidence))
+
+(defn test-1 []
+  (let [paths (map (fn [e] (get (get e "location") "entry")) normal-entries)]
+    (and (= (get normal-opened "ok") true)
+         (= (count normal-entries) 6)
+         (= paths ["alias.txt" "empty.txt" "external.bin" "hello.txt" "nested" "nested/value.txt"])
+         (= (get (get (find-entry normal-entries "hello.txt") "value") "size") 6))))
+
+(defn test-2 []
+  (let [hello (find-entry normal-entries "hello.txt")]
+    (= (get (get hello "value") "sha256")
+       "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03")))
+
+(defn test-3 []
+  (not (nil? (find-entry normal-entries "nested/value.txt"))))
+
+(defn test-4 []
+  (let [empty-entry (find-entry normal-entries "empty.txt")]
+    (and (= (get (get empty-entry "value") "size") 0)
+         (= (get (get empty-entry "value") "sha256")
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"))))
+
+(defn test-5 []
+  (let [normal-hello (first (filter (fn [e] (= (get e "location") {"entry" "hello.txt" "offset" 0 "length" 6})) normal-integrity))
+        mutated-hello (first (filter (fn [e] (= (get e "location") {"entry" "hello.txt" "offset" 0 "length" 6})) mutated-integrity))]
+    (and (= (get (get normal-hello "value") "matches") true)
+         (= (get (get mutated-hello "value") "matches") false))))
+
+(defn test-6 []
+  (let [external (find-entry normal-entries "external.bin")]
+    (and (= (get external "confidence") "unknown")
+         (= (first (get external "limitations")) "unpacked; separate file required"))))
+
+(defn test-7 []
+  (let [unsafe (find-entry unsafe-entries "../escape.txt")]
+    (and (= (get unsafe "confidence") "unknown")
+         (= (first (get unsafe "limitations")) "unsafe path rejected; filesystem access skipped"))))
+
+(defn bad-input? [path]
+  (let [result (open_asar path)]
+    (and (= (get result "ok") false)
+         (all-evidence-valid? (get result "evidence")))))
+
+(defn test-8 []
+  (and (bad-input? (str fixture-root "truncated.asar"))
+       (bad-input? (str fixture-root "broken-json.asar"))
+       (bad-input? (str fixture-root "oversized-header.asar"))))
+
+(defn test-9 []
+  (let [first-run (get normal-listed "evidence")
+        second-run (get (list_entries normal-opened) "evidence")]
+    (= (canonical_serialize first-run) (canonical_serialize second-run))))
+
+(defn test-10 []
+  (and (all-evidence-valid? (get normal-opened "evidence"))
+       (all-evidence-valid? (get normal-listed "evidence"))
+       (all-evidence-valid? (get (verify_integrity normal-opened) "evidence"))))
+
+(defn test-11 []
+  (and (= (get (validate_evidence (get normal-opened "header")) "valid") true)
+       (= (get (validate_evidence (get (first normal-entries) "value")) "valid") false)))
+
+(defn run-test [number result]
+  (assert result (str "test " number " failed"))
+  (println (str "TEST " number " PASS")))
+
+(run-test 1 (test-1))
+(run-test 2 (test-2))
+(run-test 3 (test-3))
+(run-test 4 (test-4))
+(run-test 5 (test-5))
+(run-test 6 (test-6))
+(run-test 7 (test-7))
+(run-test 8 (test-8))
+(run-test 9 (test-9))
+(run-test 10 (test-10))
+(run-test 11 (test-11))
+(println "PHASE3 ASAR PASS")

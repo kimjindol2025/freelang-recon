@@ -1,0 +1,85 @@
+;; Phase 2 Evidence v1 tests.
+(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+
+(define artifact {"path" "app.asar" "sha256" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
+(define location {"entry" "package.json" "offset" nil "length" nil})
+
+(defn expect-valid [evidence]
+  (= (get (validate_evidence evidence) "valid") true))
+
+(defn expect-invalid [evidence]
+  (= (get (validate_evidence evidence) "valid") false))
+
+(defn observed-evidence []
+  (make_evidence "package.manifest" artifact location {"name" "rea"} "observed" []))
+
+(defn inferred-evidence []
+  (make_evidence "package.entry" artifact location "dist/main.js" "inferred"
+                 ["entry inferred from package manifest"]))
+
+(defn unknown-evidence []
+  (make_evidence "native.symbol" artifact location nil "unknown"
+                 ["symbol table is unavailable"]))
+
+(defn test-1 []
+  (and (expect-valid (observed-evidence))
+       (expect-valid (inferred-evidence))
+       (expect-valid (unknown-evidence))))
+
+(defn test-2 []
+  (and (expect-invalid (dissoc (observed-evidence) "schema"))
+       (expect-invalid (dissoc (observed-evidence) "kind"))
+       (expect-invalid (dissoc (observed-evidence) "artifact"))
+       (expect-invalid (dissoc (observed-evidence) "location"))
+       (expect-invalid (dissoc (observed-evidence) "confidence"))))
+
+(defn test-3 []
+  (expect-invalid (assoc (observed-evidence) "confidence" "certain")))
+
+(defn test-4 []
+  (expect-invalid (assoc (inferred-evidence) "limitations" [])))
+
+(defn test-5 []
+  (expect-invalid (assoc (unknown-evidence) "value" "not-null")))
+
+(defn test-6 []
+  (let [evidence (observed-evidence)
+        reordered {"limitations" []
+                   "value" {"name" "rea"}
+                   "location" location
+                   "artifact" artifact
+                   "kind" "package.manifest"
+                   "confidence" "observed"
+                   "schema" "evidence/v1"
+                   "evidence_id" (get evidence "evidence_id")}
+        first-serialization (canonical_serialize evidence)
+        second-serialization (canonical_serialize evidence)]
+    (and (= first-serialization second-serialization)
+         (= first-serialization (canonical_serialize reordered)))))
+
+(defn test-7 []
+  (let [serialized (canonical_serialize (observed-evidence))
+        parsed (json-parse serialized)]
+    (= serialized (canonical_serialize parsed))))
+
+(defn test-8 []
+  (let [first (observed-evidence)
+        same (observed-evidence)
+        changed (make_evidence "package.manifest" artifact location {"name" "rex"}
+                               "observed" [])]
+    (and (= (get first "evidence_id") (get same "evidence_id"))
+         (not (= (get first "evidence_id") (get changed "evidence_id"))))))
+
+(defn run-test [number result]
+  (assert result (str "test " number " failed"))
+  (println (str "TEST " number " PASS")))
+
+(run-test 1 (test-1))
+(run-test 2 (test-2))
+(run-test 3 (test-3))
+(run-test 4 (test-4))
+(run-test 5 (test-5))
+(run-test 6 (test-6))
+(run-test 7 (test-7))
+(run-test 8 (test-8))
+(println "PHASE2 EVIDENCE PASS")

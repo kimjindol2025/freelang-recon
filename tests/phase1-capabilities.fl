@@ -1,0 +1,21 @@
+;; Phase 1 executable capability probe.
+;; stdin is supplied by the verification command.
+
+(use "/root/kilo-freelang/projects/freelang-recon/src/native-adapter")
+
+(defn probe []
+  (let [sample "/tmp/freelang-recon-phase1-sample.txt"
+        ignored-write (file-write sample "REA\nphase1")
+        raw-json "{\"name\":\"rea\",\"phase\":1}"
+        parsed (json-parse raw-json)
+        serialized (json-stringify parsed)
+        encoded (binary-file-base64 sample)
+        digest (sha256-file sample)
+        result {:stdin_direct "unsupported-in-native-runtime-use-node-adapter"
+                :json_roundtrip serialized
+                :binary_base64_bytes (buf-len encoded)
+                :sha256 digest}
+        ignored-delete (file-delete sample)]
+    result))
+
+(println (json-stringify (probe)))

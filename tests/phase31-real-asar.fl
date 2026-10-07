@@ -1,0 +1,52 @@
+;; Phase 3.1 real ASAR verification.
+(use "/root/kilo-freelang/projects/freelang-recon/src/asar")
+(use "/root/kilo-freelang/projects/freelang-recon/src/evidence")
+
+(define official-path "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/official-electron.asar")
+(define abnormal-path "/root/kilo-freelang/projects/freelang-recon/tests/fixtures/abnormal-payload-field.asar")
+(define official-opened (open_asar official-path))
+(define official-listed (list_entries official-opened))
+(define official-entries (get official-listed "entries"))
+
+(defn find-entry [entries path]
+  (first (filter (fn [e] (= (get (get e "location") "entry") path)) entries)))
+
+(defn valid? [evidence]
+  (= (get (validate_evidence evidence) "valid") true))
+
+(defn test-official-structure []
+  (let [header (get official-opened "header")
+        value (get header "value")]
+    (and (= (get official-opened "ok") true)
+         (= (get value "header_size") 1808)
+         (= (get value "json_length") 1797)
+         (= (get value "payload_offset") 1816)
+         (= (get value "prefix_field_2_relation") true)
+         (= (get value "entry_count") 7)
+         (valid? header))))
+
+(defn test-official-list-and-hash []
+  (let [paths (map (fn [e] (get (get e "location") "entry")) official-entries)
+        normal (find-entry official-entries "normal.asar")]
+    (and (= paths ["abnormal-payload-field.asar" "broken-json.asar" "mutated.asar" "normal.asar" "oversized-header.asar" "truncated.asar" "unsafe-path.asar"])
+         (= (get (get normal "value") "sha256")
+            "ecb750a65f36249fece1c6b2250ea2a2a2d80377ea1d7efba9869f36685e0813")
+         (every? valid? (get official-listed "evidence")))))
+
+(defn test-abnormal-prefix-field []
+  (let [opened (open_asar abnormal-path)
+        header (get opened "header")]
+    (and (= (get opened "ok") true)
+         (= (get (get header "value") "prefix_field_2_relation") false)
+         (= (first (get header "limitations"))
+            "prefix field [2] differs from header area - 4; treated as observed only")
+         (valid? header))))
+
+(defn run-test [number result]
+  (assert result (str "phase31 test " number " failed"))
+  (println (str "PHASE31 TEST " number " PASS")))
+
+(run-test 1 (test-official-structure))
+(run-test 2 (test-official-list-and-hash))
+(run-test 3 (test-abnormal-prefix-field))
+(println "PHASE31 REAL ASAR PASS")

@@ -2,11 +2,19 @@
 
 ## 현재 상태
 
-- Phase 2: Local Inventory
+- Phase 1 완료 / Phase 2: Local Inventory
 - 대상 실행: 금지
 - Provider: `local-inventory`
 - 저장: AFJ DB 연동 예정
 - 화면: FreeLang Framework에서 연동 예정
+
+## Phase 1 점검
+
+- JSON parse/serialize: v11 기본 builtin
+- stdin lines: `scripts/native-capability-probe.mjs`
+- binary file bytes: Node `readFile` adapter
+- file SHA-256: Node `crypto` adapter; FreeLang `sha256-file` fallback
+- 결과: Phase 1 PASS
 
 ## 알려진 런타임 제한
 

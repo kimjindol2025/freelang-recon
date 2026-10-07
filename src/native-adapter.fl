@@ -1,0 +1,9 @@
+;; Phase 1 native adapters.
+;; shell-safe is used with fixed program names and argument arrays only.
+;; Caller must authorize target paths before calling binary-file-base64 or sha256-file.
+
+(defn binary-file-base64 [path]
+  (str-trim (shell-safe "base64" ["-w0" path])))
+
+(defn sha256-file [path]
+  (first (str-split (shell-safe "sha256sum" [path]) " ")))
