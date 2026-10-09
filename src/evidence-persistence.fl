@@ -1,0 +1,27 @@
+;; Phase 4-A Evidence persistence through the AFJ CLI host boundary.
+
+(use "src/evidence")
+
+(define recon-root (or (env-get "RECON_ROOT") (shell-cwd)))
+(define persistence-adapter (str recon-root "/scripts/afldb-evidence.mjs"))
+
+(defn persistence-call [command db-dir argument]
+  (json-parse
+    (str-trim
+      (shell-safe "node" [persistence-adapter command db-dir argument]))))
+
+(defn persist_evidence [db-dir evidence]
+  (let [validation (validate_evidence evidence)]
+    (if (not (= (get validation "valid") true))
+        {"ok" false "code" "E_INVALID_EVIDENCE" "errors" (get validation "errors")}
+        (let [file (str "/tmp/freelang-recon-evidence-" (uuid) ".json")
+              ignored-write (file-write file (json-stringify evidence))
+              result (persistence-call "save" db-dir file)
+              ignored-delete (file-delete file)]
+          result))))
+
+(defn get_evidence [db-dir evidence-digest]
+  (persistence-call "get" db-dir evidence-digest))
+
+(defn verify_evidence_store [db-dir]
+  (persistence-call "verify" db-dir ""))

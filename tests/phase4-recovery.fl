@@ -1,0 +1,12 @@
+;; Phase 4-A restart recovery test: this runs in a fresh FreeLang process.
+(use "src/evidence-persistence")
+
+(define db-dir (or (env-get "AFJ_DB_DIR") "/tmp/freelang-recon-phase4-db"))
+(define digest (env-get "AFJ_EVIDENCE_DIGEST"))
+(assert (not (= digest nil)) "AFJ_EVIDENCE_DIGEST is required")
+(define loaded (get_evidence db-dir digest))
+(define verified (verify_evidence_store db-dir))
+(assert (= (get loaded "ok") true) "restart read failed")
+(assert (= (get (get loaded "record") "evidence_digest") digest) "restart digest mismatch")
+(assert (= (get (get verified "verification") "ok") true) "restart hash verification failed")
+(println "RESTART_RECOVERY=PASS")
