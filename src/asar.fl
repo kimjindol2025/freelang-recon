@@ -218,6 +218,21 @@
         {"id" (get record "path") "offset" (+ (get opened "payload_offset") offset) "length" size}
         nil)))
 
+(defn record-payload-valid? [record payload-available]
+  (let [node (get record "node")]
+    (if (or (not (map? node))
+            (map? (get node "files"))
+            (contains? node "link")
+            (= (get node "unpacked") true)
+            (not (and (contains? node "size") (contains? node "offset"))))
+        true
+        (let [size (get node "size")
+              offset (parse-offset (get node "offset"))]
+          (if (and (number? size) (>= size 0)
+                   (number? offset) (>= offset 0))
+              (<= (+ offset size) payload-available)
+              true)))))
+
 (defn open_asar [path]
   (if (not (file_exists path))
       (open-failure path "ASAR file does not exist")
@@ -227,28 +242,36 @@
             {"ok" false "evidence" [(get parsed "error")]}
             (let [artifact (artifact-for path file-size)
                   records (walk-files (get (get parsed "tree") "files") "")
+                  payload-available (- file-size (get parsed "payload_offset"))
+                  invalid-record (first (filter (fn [record]
+                                                  (not (record-payload-valid? record payload-available)))
+                                                records))
                   header-limitations (if (= (get parsed "payload_size") (- (get parsed "header_area") 4))
                                         []
-                                        ["prefix field [2] differs from header area - 4; treated as observed only"])
-                  header (make_evidence "asar.header" artifact
-                                        {"entry" "<header>" "offset" 16 "length" (get parsed "json_length")}
-                                        {"header_size" (get parsed "header_area")
-                                         "json_length" (get parsed "json_length")
-                                         "payload_size" (get parsed "payload_size")
-                                         "payload_offset" (get parsed "payload_offset")
-                                         "prefix_field_2_relation" (= (get parsed "payload_size") (- (get parsed "header_area") 4))
-                                         "entry_count" (count records)}
-                                        "observed" header-limitations)]
-              {"ok" true
-               "file_size" file-size
-               "payload_offset" (get parsed "payload_offset")
-               "payload_size" (get parsed "payload_size")
-               "payload_available" (- file-size (get parsed "payload_offset"))
-               "tree" (get parsed "tree")
-               "artifact" artifact
-               "records" records
-               "header" header
-               "evidence" [header]})))))
+                                        ["prefix field [2] differs from header area - 4; treated as observed only"])]
+              (if (map? invalid-record)
+                  {"ok" false
+                   "evidence" [(make_error_evidence path "asar.header"
+                                                       "ASAR entry range exceeds available payload")]}
+                  (let [header (make_evidence "asar.header" artifact
+                                               {"entry" "<header>" "offset" 16 "length" (get parsed "json_length")}
+                                               {"header_size" (get parsed "header_area")
+                                                "json_length" (get parsed "json_length")
+                                                "payload_size" (get parsed "payload_size")
+                                                "payload_offset" (get parsed "payload_offset")
+                                                "prefix_field_2_relation" (= (get parsed "payload_size") (- (get parsed "header_area") 4))
+                                                "entry_count" (count records)}
+                                               "observed" header-limitations)]
+                    {"ok" true
+                     "file_size" file-size
+                     "payload_offset" (get parsed "payload_offset")
+                     "payload_size" (get parsed "payload_size")
+                     "payload_available" payload-available
+                     "tree" (get parsed "tree")
+                     "artifact" artifact
+                     "records" records
+                     "header" header
+                     "evidence" [header]})))))))
 
 (defn list_entries [opened]
   (if (not (= (get opened "ok") true))
@@ -292,9 +315,9 @@
                        nil "unknown" ["integrity declaration absent"])
       true
         (let [entry-evidence (make-entry-evidence opened record)
-              value (get entry-evidence "value")]
+              entry_value (get entry-evidence "value")]
           (cond
-            (not (and (map? value) (= (get value "kind") "file")))
+            (not (and (map? entry_value) (= (get entry_value "kind") "file")))
               (make_evidence "asar.integrity" artifact {"entry" path "offset" nil "length" nil}
                              nil "unknown" ["entry content is unavailable for integrity verification"])
             (not (= (str-lower (str (get integrity "algorithm"))) "sha256"))
@@ -302,29 +325,30 @@
                              nil "unknown" ["unsupported integrity algorithm"])
             true
               (let [declared (get integrity "hash")
-                    computed (get value "sha256")
+                    computed (get entry_value "sha256")
                     block-size (get integrity "blockSize")
                     blocks (get integrity "blocks")
                     valid-blocks (and (number? block-size) (> block-size 0) (array? blocks) (not (empty? blocks)))
                     block-results (if valid-blocks
                                       (block-hashes (get artifact "path")
-                                                    (+ (get opened "payload_offset") (get value "offset"))
-                                                    (get value "size") block-size blocks 0)
+                                                    (+ (get opened "payload_offset") (get entry_value "offset"))
+                                                    (get entry_value "size") block-size blocks 0)
                                       [])
                     blocks-match (if valid-blocks (blocks-all-match? block-results) "unknown")
                     limitations (if valid-blocks [] ["integrity blocks absent or malformed; block comparison unknown"])]
-                (make_evidence "asar.integrity" artifact
-                               {"entry" path "offset" (get value "offset") "length" (get value "size")}
-                               {"algorithm" "sha256" "declared" declared "computed" computed "matches" (= declared computed)
-                                "block_size" (if valid-blocks block-size nil)
-                                "block_count" (if valid-blocks (count blocks) 0)
-                                "blocks_match" blocks-match
-                                "first_mismatch_block"
-                                  (if valid-blocks
-                                      (let [mismatch (first (filter (fn [item] (= (get item "matches") false)) block-results))]
-                                        (if (map? mismatch) (get mismatch "index") nil))
-                                      nil)}
-                               "observed" limitations)))))))
+                (let [integrity_result {"algorithm" "sha256" "declared" declared "computed" computed "matches" (= declared computed)
+                                       "block_size" (if valid-blocks block-size nil)
+                                       "block_count" (if valid-blocks (count blocks) 0)
+                                       "blocks_match" blocks-match
+                                       "first_mismatch_block"
+                                         (if valid-blocks
+                                             (let [mismatch (first (filter (fn [item] (= (get item "matches") false)) block-results))]
+                                               (if (map? mismatch) (get mismatch "index") nil))
+                                             nil)}]
+                  (make_evidence "asar.integrity" artifact
+                                 {"entry" path "offset" (get entry_value "offset") "length" (get entry_value "size")}
+                                 integrity_result
+                                 "observed" limitations))))))))
 
 (defn verify_integrity [opened]
   (if (not (= (get opened "ok") true))

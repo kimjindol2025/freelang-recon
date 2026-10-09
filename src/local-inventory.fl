@@ -1,21 +1,46 @@
 ;; FreeLang Recon Phase 2 local inventory
 ;; 대상은 실행하지 않고 디렉터리 목록과 manifest digest만 수집한다.
 
-(defn inventory [target]
-  (let [entries (sort (dir-list target))
-        manifest {:target target :entries entries :entry_count (count entries)}
-        manifest-path "/tmp/freelang-recon-manifest.json"
-        raw (json-stringify manifest)
-        ignored-write (file-write manifest-path raw)
-        digest-output (shell-safe "sha256sum" [manifest-path])
-        digest (first (str-split digest-output " "))
-        ignored-delete (file-delete manifest-path)]
-    {:provider "local-inventory"
-     :execution "not-executed"
-     :manifest manifest
-     :digest digest
-     :unknowns ["recursive child metadata" "binary symbols" "runtime behavior"]}))
+(defn safe-target-path? [path]
+  (and (= (type-of path) "string")
+       (starts-with? path "/")
+       (not (some (fn [segment] (or (= segment ".") (= segment "..")))
+                  (str-split path "/")))))
+
+(defn target-allowed? [target allowed-root]
+  (and (safe-target-path? target)
+       (safe-target-path? allowed-root)
+       (or (= target allowed-root)
+           (starts-with? target (str allowed-root "/")))))
+
+(defn denied-inventory [target allowed-root]
+  {:provider "local-inventory"
+   :execution "not-executed"
+   :manifest nil
+   :digest nil
+   :unknowns [(str "target path is outside allowlist: " target)
+              (str "allowlist root: " allowed-root)]})
+
+(defn inventory [target allowed-root]
+  (if (not (target-allowed? target allowed-root))
+      (denied-inventory target allowed-root)
+      (let [entries (sort (dir-list target))
+            manifest {:target target :entries entries :entry_count (count entries)}
+            manifest-path (str "/tmp/freelang-recon-manifest-" (uuid) ".json")
+            raw (json-stringify manifest)
+            ignored-write (file-write manifest-path raw)
+            digest-result (fl-try (shell-safe "sha256sum" [manifest-path]) (catch err nil))
+            digest-output (if (map? digest-result) (get digest-result "value") digest-result)
+            digest (if (or (nil? digest-output) (= digest-output "")) nil (first (str-split digest-output " ")))
+            ignored-delete (file-delete manifest-path)]
+        {:provider "local-inventory"
+         :execution "not-executed"
+         :manifest manifest
+         :digest digest
+         :unknowns ["recursive child metadata" "binary symbols" "runtime behavior"]})))
 
 (define default-target (or (env-get "RECON_INVENTORY_TARGET")
                            (str (or (env-get "RECON_ROOT") (shell-cwd)) "/tests/fixtures")))
-(println (json-stringify (inventory default-target)))
+(define allowed-root (or (env-get "RECON_INVENTORY_ALLOWED_ROOT")
+                         (or (env-get "RECON_ROOT") (shell-cwd))))
+(println (json-stringify (inventory default-target allowed-root)))

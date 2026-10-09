@@ -2,6 +2,9 @@ import { open } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { createHash } from "node:crypto";
 
+const MAX_RANGE_LENGTH = 64 * 1024 * 1024;
+const MAX_BATCH_ITEMS = 500;
+
 function fail(message) {
   return JSON.stringify({ ok: false, error: message });
 }
@@ -11,6 +14,7 @@ function rangeArgs(args) {
   const length = Number(args[1]);
   if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid offset");
   if (!Number.isSafeInteger(length) || length < 0) throw new Error("invalid length");
+  if (length > MAX_RANGE_LENGTH) throw new Error("range exceeds 64 MiB limit");
   return { offset, length };
 }
 
@@ -54,11 +58,13 @@ async function hashRange(path, offset, length) {
 function parseRanges(value) {
   const ranges = JSON.parse(value);
   if (!Array.isArray(ranges)) throw new Error("ranges must be an array");
+  if (ranges.length > MAX_BATCH_ITEMS) throw new Error("too many ranges");
   return ranges.map((item) => {
     const offset = Number(item.offset);
     const length = Number(item.length);
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("invalid offset");
     if (!Number.isSafeInteger(length) || length < 0) throw new Error("invalid length");
+    if (length > MAX_RANGE_LENGTH) throw new Error("range exceeds 64 MiB limit");
     return { id: item.id, offset, length };
   });
 }
@@ -99,6 +105,7 @@ async function main() {
     if (command === "read_prefixes") {
       const paths = JSON.parse(path || "[]");
       if (!Array.isArray(paths)) throw new Error("paths must be an array");
+      if (paths.length > MAX_BATCH_ITEMS) throw new Error("too many paths");
       const prefixes = [];
       for (const item of paths) {
         try {

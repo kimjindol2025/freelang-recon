@@ -15,6 +15,19 @@ for file in tests/phase1-capabilities.fl tests/phase2-evidence.fl tests/phase3-a
   node "$V11/bootstrap.js" run "$file"
 done
 
+inventory_json="$(RECON_INVENTORY_TARGET="$ROOT/tests/fixtures" \
+  RECON_INVENTORY_ALLOWED_ROOT="$ROOT" \
+  node "$V11/bootstrap.js" run src/local-inventory.fl)"
+node -e 'const d=JSON.parse(process.argv[1]); if (d.execution !== "not-executed" || !d.manifest || !d.digest || d.manifest.target !== process.argv[2]) process.exit(1); console.log("LOCAL_INVENTORY_ALLOWLIST=PASS")' "$inventory_json" "$ROOT/tests/fixtures"
+
+denied_json="$(RECON_INVENTORY_TARGET="/tmp" \
+  RECON_INVENTORY_ALLOWED_ROOT="$ROOT" \
+  node "$V11/bootstrap.js" run src/local-inventory.fl)"
+node -e 'const d=JSON.parse(process.argv[1]); if (d.manifest !== null || !d.unknowns.some(item => item.includes("outside allowlist"))) process.exit(1); console.log("LOCAL_INVENTORY_DENY=PASS")' "$denied_json"
+
+range_error="$(node scripts/native-bytes.mjs read_bytes "$ROOT/tests/fixtures/normal.asar" 0 67108865)"
+node -e 'const d=JSON.parse(process.argv[1]); if (d.ok !== false || d.error !== "range exceeds 64 MiB limit") process.exit(1); console.log("NATIVE_RANGE_LIMIT=PASS")' "$range_error"
+
 if [[ "${1:-}" == "--portable" && "${RECON_PORTABLE_ACTIVE:-0}" != "1" ]]; then
   copy_root="$(mktemp -d)"
   trap 'rm -rf "$copy_root"' EXIT
