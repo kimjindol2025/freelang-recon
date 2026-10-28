@@ -1,0 +1,47 @@
+;; Phase 4-C adapter save/get/batch/verify smoke test.
+(use "src/afj-tcp-adapter")
+
+(define artifact {"path" "tests/fixtures/normal.asar"
+                  "sha256" "ecb750a65f36249fece1c6b2250ea2a2a2d80377ea1d7efba9869f36685e0813"})
+
+(defn evidence-for [entry name]
+  (make_evidence "package.manifest" artifact
+                 {"entry" entry "offset" 0 "length" nil}
+                 {"name" name} "observed" []))
+
+(define session (afj-login))
+(assert (= (get session "ok") true) "AFJ login failed")
+(define schema (afj-ensure-schema session))
+(assert (= (get schema "ok") true) "AFJ schema creation failed")
+
+(define first-evidence (evidence-for "package.json" "first"))
+(define first-save (afj-save session first-evidence))
+(assert (and (= (get first-save "ok") true)
+             (= (get first-save "status") "saved")) "AFJ save failed")
+(println "ADAPTER_SAVE=PASS")
+
+(define second-save (afj-save session first-evidence))
+(assert (and (= (get second-save "ok") true)
+             (= (get second-save "status") "idempotent")) "AFJ idempotency failed")
+(println "ADAPTER_IDEMPOTENCY=PASS")
+
+(define loaded (afj-get session (get first-evidence "evidence_id")))
+(assert (and (= (get loaded "ok") true)
+             (= (get (get loaded "evidence") "evidence_id")
+                (get first-evidence "evidence_id"))) "AFJ get failed")
+(println "ADAPTER_GET=PASS")
+
+(define batch [(evidence-for "entry-1" "batch-1")
+               (evidence-for "entry-2" "batch-2")
+               (evidence-for "entry-3" "batch-3")
+               (evidence-for "entry-4" "batch-4")
+               (evidence-for "entry-5" "batch-5")])
+(define batch-save (afj-save-batch session batch))
+(assert (and (= (get batch-save "ok") true)
+             (= (get batch-save "records") 5)) "AFJ batch save failed")
+(println "ADAPTER_BATCH_5=PASS")
+
+(define verified (afj-verify session))
+(assert (= (get verified "ok") true) "AFJ evidence verification failed")
+(assert (= (get verified "records") 6) "AFJ evidence record count mismatch")
+(println "ADAPTER_VERIFY=PASS")

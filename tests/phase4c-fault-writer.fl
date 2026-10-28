@@ -1,0 +1,26 @@
+;; Leaves a five-record transaction uncommitted for the external harness to
+;; terminate the AFJ DB95 process before recovery.
+(use "src/afj-tcp-adapter")
+
+(define artifact {"path" "tests/fixtures/normal.asar"
+                  "sha256" "ecb750a65f36249fece1c6b2250ea2a2a2d80377ea1d7efba9869f36685e0813"})
+(defn evidence-for [entry name]
+  (make_evidence "package.manifest" artifact
+                 {"entry" entry "offset" 0 "length" nil}
+                 {"name" name} "observed" []))
+
+(define session (afj-login))
+(assert (= (get session "ok") true) "AFJ login failed")
+(define schema (afj-ensure-schema session))
+(assert (= (get schema "ok") true) "AFJ schema creation failed")
+(define batch [(evidence-for "fault-1" "fault-1")
+               (evidence-for "fault-2" "fault-2")
+               (evidence-for "fault-3" "fault-3")
+               (evidence-for "fault-4" "fault-4")
+               (evidence-for "fault-5" "fault-5")])
+(define begun (afj-tx session "BEGIN"))
+(assert (= (get begun "ok") true) "AFJ begin failed")
+(define inserted (batch-insert session (map evidence-row batch) 0))
+(assert (= (get inserted "ok") true) "AFJ fault batch insert failed")
+(println "PHASE4C_WRITER_READY")
+(set-timeout (fn [] (println "PHASE4C_WRITER_TIMEOUT")) 60000)

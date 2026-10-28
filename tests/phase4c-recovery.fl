@@ -1,0 +1,9 @@
+;; Fresh-session read after the AFJ DB95 process was terminated mid-transaction.
+(use "src/afj-tcp-adapter")
+
+(define session (afj-login))
+(assert (= (get session "ok") true) "AFJ recovery login failed")
+(define result (afj-query session "SELECT * FROM recon_evidence"))
+(assert (= (get result "ok") true) "AFJ recovery query failed")
+(assert (= (count (rows-of result)) 0) "uncommitted batch became visible")
+(println "PHASE4C_BATCH_ABSENT_AFTER_KILL=PASS")

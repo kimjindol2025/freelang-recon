@@ -1,0 +1,49 @@
+{
+  "schema": "test-preservation@1",
+  "date": "2026-10-28",
+  "project_id": "freelang-recon",
+  "source_commit": "3013a87eddd8eb9dec153ab503b146997013204c",
+  "published_base_commit": "3013a87eddd8eb9dec153ab503b146997013204c",
+  "purpose": "Preserve current mobile test sources, fixtures, expected results and validation runners",
+  "files": [
+    "scripts/test-native-bytes.mjs",
+    "scripts/test-phase4c.mjs",
+    "scripts/test-phase4c.sh",
+    "scripts/test-realpath-boundary.mjs",
+    "tests/phase4c-adapter.fl",
+    "tests/phase4c-fault-writer.fl",
+    "tests/phase4c-recovery.fl",
+    "scripts/test-all.sh",
+    "scripts/test-phase4.sh",
+    "scripts/test-phase4b.mjs",
+    "scripts/test-phase4b.sh",
+    "tests/README.md",
+    "tests/fixtures/abnormal-payload-field.asar",
+    "tests/fixtures/blocks-mutated.asar",
+    "tests/fixtures/blocks.asar",
+    "tests/fixtures/broken-json.asar",
+    "tests/fixtures/mutated.asar",
+    "tests/fixtures/normal.asar",
+    "tests/fixtures/official-electron.asar",
+    "tests/fixtures/oversized-header.asar",
+    "tests/fixtures/truncated.asar",
+    "tests/fixtures/unsafe-path.asar",
+    "tests/fixtures/unsafe-paths.asar",
+    "tests/phase1-capabilities.fl",
+    "tests/phase1-sample.bin",
+    "tests/phase2-evidence.fl",
+    "tests/phase3-asar.fl",
+    "tests/phase31-real-asar.fl",
+    "tests/phase4-persistence.fl",
+    "tests/phase4-recovery.fl"
+  ],
+  "validation": {
+    "copied_file_checksum_diff_lines": 0,
+    "functional_tests": "NOT_RUN"
+  },
+  "notes": [
+    "Non-test working-tree changes were not included",
+    "This is an archive branch, not a runtime release",
+    "Credentials and dependency caches are excluded"
+  ]
+}
